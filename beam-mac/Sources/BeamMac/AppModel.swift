@@ -2,7 +2,6 @@ import Foundation
 import ScreenCaptureKit
 
 @Observable
-@MainActor
 class AppModel {
     var peers: [PeerInfo] = []
     var windows: [SCWindow] = []
@@ -17,6 +16,11 @@ class AppModel {
         browser.onPeersChanged = { [weak self] peers in
             self?.peers = peers
         }
+    }
+
+    /// Call once the main run loop is running (from DispatchQueue.main.async in main.swift).
+    /// NetServiceBrowser and NetService require an active run loop for callbacks.
+    func start() {
         browser.start()
         Task { await refreshWindows() }
     }

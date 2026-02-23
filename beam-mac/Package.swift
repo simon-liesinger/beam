@@ -8,10 +8,7 @@ let package = Package(
         .executableTarget(
             name: "BeamMac",
             path: "Sources/BeamMac",
-            swiftSettings: [
-                // Required for @main App protocol entry point in SPM executable targets
-                .unsafeFlags(["-parse-as-library"])
-            ],
+            swiftSettings: [],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("ScreenCaptureKit"),

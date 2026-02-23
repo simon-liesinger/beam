@@ -1,28 +1,26 @@
 import Foundation
 import Network
 
-/// Advertises this Beam instance on the LAN and browses for other Beam instances.
-/// Service type: _beam._tcp.
-/// TXT record keys: version, platform, deviceID, name
-class BonjourBrowser {
+// NWListener to advertise, NWBrowser(.tcp) to discover service names,
+// NetService.resolve() (on main run loop) to fetch TXT records.
+// NWBrowser metadata is always <none> so we must resolve separately.
+
+class BonjourBrowser: NSObject, NetServiceDelegate {
     private let deviceID: String
     private let deviceName: String
+
     private var listener: NWListener?
     private var browser: NWBrowser?
-    private let queue = DispatchQueue(label: "beam.bonjour")
+    private let bgQueue = DispatchQueue(label: "beam.bonjour")
+
+    private var resolvingServices: [NetService] = []  // must stay alive during resolve
 
     var onPeersChanged: (([PeerInfo]) -> Void)?
 
-    init() {
-        // Stable identity: persist to UserDefaults so it survives restarts
-        if let saved = UserDefaults.standard.string(forKey: "beam.deviceID") {
-            deviceID = saved
-        } else {
-            let id = UUID().uuidString
-            UserDefaults.standard.set(id, forKey: "beam.deviceID")
-            deviceID = id
-        }
+    override init() {
+        deviceID = UUID().uuidString
         deviceName = Host.current().localizedName ?? "Mac"
+        super.init()
     }
 
     func start() {
@@ -35,48 +33,32 @@ class BonjourBrowser {
         browser?.cancel()
     }
 
-    // MARK: - Advertise
+    // MARK: - Advertise via NWListener (proven: NWBrowser finds it)
 
     private func startAdvertising() {
-        do {
-            listener = try NWListener(using: .tcp)
-        } catch {
-            print("Bonjour: failed to create listener: \(error)")
-            return
-        }
+        do { listener = try NWListener(using: .tcp) }
+        catch { print("Bonjour: listener init failed: \(error)"); return }
 
         var txt = NWTXTRecord()
-        txt["version"] = "1"
+        txt["version"]  = "1"
         txt["platform"] = "mac"
         txt["deviceID"] = deviceID
-        txt["name"] = deviceName
+        txt["name"]     = deviceName
 
-        listener?.service = NWListener.Service(
-            name: deviceName,
-            type: "_beam._tcp.",
-            txtRecord: txt
-        )
-
-        listener?.stateUpdateHandler = { state in
+        listener?.service = NWListener.Service(name: deviceName, type: "_beam._tcp.",
+                                               txtRecord: txt)
+        listener?.stateUpdateHandler = { [weak self] state in
             switch state {
-            case .ready:
-                print("Bonjour: advertising as \"\(self.deviceName)\"")
-            case .failed(let error):
-                print("Bonjour: listener failed: \(error)")
-            default:
-                break
+            case .ready:            print("Bonjour: advertising as \"\(self?.deviceName ?? "")\"")
+            case .failed(let err):  print("Bonjour: listener failed: \(err)")
+            default: break
             }
         }
-
-        // We don't accept connections yet — that's Week 4's TCPControlChannel
-        listener?.newConnectionHandler = { connection in
-            connection.cancel()
-        }
-
-        listener?.start(queue: queue)
+        listener?.newConnectionHandler = { conn in conn.cancel() }
+        listener?.start(queue: bgQueue)
     }
 
-    // MARK: - Browse
+    // MARK: - Discover via NWBrowser(.tcp) (proven: browseResultsChangedHandler fires)
 
     private func startBrowsing() {
         let descriptor = NWBrowser.Descriptor.bonjour(type: "_beam._tcp.", domain: nil)
@@ -84,29 +66,65 @@ class BonjourBrowser {
 
         browser?.stateUpdateHandler = { state in
             switch state {
-            case .ready:
-                print("Bonjour: browsing for peers")
-            case .failed(let error):
-                print("Bonjour: browser failed: \(error)")
-            default:
-                break
+            case .ready:           print("Bonjour: browser ready")
+            case .failed(let err): print("Bonjour: browser failed: \(err)")
+            default: break
             }
         }
 
         browser?.browseResultsChangedHandler = { [weak self] results, _ in
-            guard let self else { return }
-            let peers = results.compactMap { result -> PeerInfo? in
-                guard case .bonjour(let txt) = result.metadata else { return nil }
-                guard let peerID = txt["deviceID"], peerID != self.deviceID else { return nil }
-                let name = txt["name"] ?? "Unknown"
-                let platform = txt["platform"] ?? "mac"
-                return PeerInfo(id: peerID, name: name, platform: platform, endpoint: result.endpoint)
-            }
-            DispatchQueue.main.async {
-                self.onPeersChanged?(peers.sorted { $0.name < $1.name })
-            }
+            DispatchQueue.main.async { self?.resolveAll(results) }
         }
 
-        browser?.start(queue: queue)
+        browser?.start(queue: bgQueue)
+    }
+
+    // MARK: - Resolve TXT records (NetService.resolve, called on main run loop)
+
+    private func resolveAll(_ results: Set<NWBrowser.Result>) {
+        resolvingServices.removeAll()
+
+        for result in results {
+            guard case let NWEndpoint.service(name: name, type: type, domain: domain,
+                                              interface: _) = result.endpoint else { continue }
+            let svc = NetService(domain: domain, type: type, name: name)
+            svc.delegate = self
+            svc.schedule(in: .main, forMode: .common)
+            svc.resolve(withTimeout: 5.0)
+            resolvingServices.append(svc)
+        }
+    }
+
+    // MARK: - NetServiceDelegate
+
+    func netServiceDidResolveAddress(_ sender: NetService) {
+        publishPeers()
+    }
+
+    func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
+        print("Bonjour: resolve failed for \(sender.name): \(errorDict)")
+        publishPeers()
+    }
+
+    // MARK: - Build peer list
+
+    private func publishPeers() {
+        let peers: [PeerInfo] = resolvingServices.compactMap { svc -> PeerInfo? in
+            guard let txtData = svc.txtRecordData() else { return nil }
+            let dict = NetService.dictionary(fromTXTRecord: txtData)
+
+            guard let idData  = dict["deviceID"],
+                  let peerID  = String(data: idData, encoding: .utf8),
+                  peerID != deviceID
+            else { return nil }
+
+            let name     = dict["name"].flatMap     { String(data: $0, encoding: .utf8) } ?? svc.name
+            let platform = dict["platform"].flatMap { String(data: $0, encoding: .utf8) } ?? "mac"
+            let endpoint = NWEndpoint.service(name: svc.name, type: svc.type,
+                                              domain: svc.domain, interface: nil)
+            return PeerInfo(id: peerID, name: name, platform: platform, endpoint: endpoint)
+        }
+
+        onPeersChanged?(peers.sorted { $0.name < $1.name })
     }
 }

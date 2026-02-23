@@ -54,6 +54,12 @@ struct MainView: View {
         }
         .listStyle(.sidebar)
         .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Check for Updates…") {
+                    // TODO: wire up to Sparkle or manual DMG check in Phase 2
+                }
+                .foregroundStyle(.secondary)
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button("Beam") {
                     // Wired up in Week 3 — streaming pipeline

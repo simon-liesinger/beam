@@ -21,12 +21,16 @@ window.center()
 window.contentView = NSHostingView(rootView: MainView().environment(model))
 window.makeKeyAndOrderFront(nil)
 
+// Terminate when the main window is closed
+NotificationCenter.default.addObserver(
+    forName: NSWindow.willCloseNotification,
+    object: window,
+    queue: .main
+) { _ in NSApp.terminate(nil) }
+
 app.activate(ignoringOtherApps: true)
 
-// NetServiceBrowser/NetService require an active run loop.
-// Dispatch to the first tick so start() runs inside app.run().
-DispatchQueue.main.async {
-    model.start()
-}
+// NetService requires an active run loop for callbacks.
+DispatchQueue.main.async { model.start() }
 
 app.run()

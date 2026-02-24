@@ -2,33 +2,33 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleIdentifier</key>
-    <string>com.beam.mac</string>
-    <key>CFBundleName</key>
-    <string>Beam</string>
-    <key>CFBundleDisplayName</key>
-    <string>Beam</string>
-    <key>CFBundleExecutable</key>
-    <string>BeamMac</string>
-    <key>CFBundleVersion</key>
-    <string>6</string>
-    <key>CFBundleShortVersionString</key>
-    <string>0.6.0</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-    <key>NSScreenCaptureUsageDescription</key>
-    <string>Beam needs screen recording to capture windows for beaming to other devices.</string>
-    <key>NSAppleEventsUsageDescription</key>
-    <string>Beam uses Accessibility to move windows and inject input events.</string>
-    <key>NSBonjourServices</key>
-    <array>
-        <string>_beam._tcp.</string>
-    </array>
-    <key>NSLocalNetworkUsageDescription</key>
-    <string>Beam discovers other devices on your local network to beam windows.</string>
+	<key>CFBundleDisplayName</key>
+	<string>Beam</string>
+	<key>CFBundleExecutable</key>
+	<string>BeamMac</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.beam.mac</string>
+	<key>CFBundleName</key>
+	<string>Beam</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.7.0</string>
+	<key>CFBundleVersion</key>
+	<string>7</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Beam uses Accessibility to move windows and inject input events.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_beam._tcp.</string>
+	</array>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Beam discovers other devices on your local network to beam windows.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Beam needs screen recording to capture windows for beaming to other devices.</string>
 </dict>
 </plist>

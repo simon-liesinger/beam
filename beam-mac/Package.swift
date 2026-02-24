@@ -29,22 +29,7 @@ let package = Package(
             name: "BeamMacTests",
             dependencies: ["BeamMacCore"],
             path: "Tests/BeamMacTests",
-            // Testing.framework is in the CommandLineTools developer frameworks,
-            // not the macOS SDK — need explicit paths for compiler, linker, and rpath.
-            swiftSettings: [
-                .swiftLanguageMode(.v5),
-                .unsafeFlags([
-                    "-F", "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
-                ]),
-            ],
-            linkerSettings: [
-                .linkedFramework("Testing"),
-                .unsafeFlags([
-                    "-F", "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
-                    "-Xlinker", "-rpath",
-                    "-Xlinker", "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
-                ]),
-            ]
+            swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]
 )

@@ -47,13 +47,15 @@ struct AudioCodecTests {
 
     @Test func encoderOutputSizeIsReasonable() throws {
         let encoder = try AudioEncoder(sampleRate: 48000, channels: 2)
-        var aacSize = 0
-        encoder.onAAC = { aacSize = $0.count }
+        var maxAacSize = 0
+        encoder.onAAC = { maxAacSize = max(maxAacSize, $0.count) }
+        // Feed 2 frames — first may be a tiny init packet; second should be full audio
         encoder.encode(pcmBuffer: makeSineBuffer(frames: 1024))
-        if aacSize > 0 {
+        encoder.encode(pcmBuffer: makeSineBuffer(frames: 1024))
+        if maxAacSize > 0 {
             // 128kbps, 1024 frames @ 48kHz ≈ 21ms → ~336 bytes; allow codec headroom
-            #expect(aacSize < 800, "AAC packet suspiciously large")
-            #expect(aacSize > 10,  "AAC packet suspiciously tiny")
+            #expect(maxAacSize < 800, "AAC packet suspiciously large")
+            #expect(maxAacSize > 10,  "AAC packet suspiciously tiny")
         }
     }
 

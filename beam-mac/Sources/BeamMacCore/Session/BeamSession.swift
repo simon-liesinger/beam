@@ -302,6 +302,17 @@ class BeamSession {
                 self.controlChannel?.send(type: "cursor_state", payload: [
                     "visible": isVisible,
                 ])
+
+                if !isVisible {
+                    // The target app (e.g. Minecraft via GLFW) hid/locked the system cursor.
+                    // These are global calls so they affect the sender's real cursor too.
+                    // Undo them on the sender side — the receiver handles its own capture.
+                    CGAssociateMouseAndMouseCursorPosition(1)
+                    CGDisplayShowCursor(CGMainDisplayID())
+                    NSCursor.unhide()
+                    // Reset so we detect if the app hides it again next tick
+                    self.lastCursorVisible = 1
+                }
             }
         }
     }

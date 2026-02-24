@@ -49,7 +49,7 @@ class InputInjector {
         // post(tap:) goes through the window server which properly routes clicks
         // to the target window on the virtual display. postToPid doesn't work for
         // mouse clicks on hidden windows (the app treats them as activation events).
-        event.post(tap: .cghidEventTap)
+        postWithoutMovingCursor(event)
     }
 
     func mouseUp(at point: CGPoint, button: CGMouseButton = .left) {
@@ -57,7 +57,7 @@ class InputInjector {
         guard let event = CGEvent(mouseEventSource: nil, mouseType: type,
                                    mouseCursorPosition: point, mouseButton: button) else { return }
         event.setIntegerValueField(.mouseEventClickState, value: 1)
-        event.post(tap: .cghidEventTap)
+        postWithoutMovingCursor(event)
     }
 
     func click(at point: CGPoint, button: CGMouseButton = .left) {
@@ -69,7 +69,16 @@ class InputInjector {
     func mouseDrag(to point: CGPoint) {
         guard let event = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged,
                                    mouseCursorPosition: point, mouseButton: .left) else { return }
+        postWithoutMovingCursor(event)
+    }
+
+    /// Post a mouse event via .cghidEventTap without stealing the sender's cursor.
+    /// Saves the current cursor position, posts the event (which warps the cursor
+    /// to the virtual display), then immediately warps it back.
+    private func postWithoutMovingCursor(_ event: CGEvent) {
+        let savedPos = CGEvent(source: nil)?.location ?? .zero
         event.post(tap: .cghidEventTap)
+        CGWarpMouseCursorPosition(savedPos)
     }
 
     // MARK: - Keyboard

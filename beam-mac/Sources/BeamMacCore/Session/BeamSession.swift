@@ -3,6 +3,11 @@ import ScreenCaptureKit
 import CoreMedia
 import Network
 
+// CGCursorIsVisible is marked unavailable in the SDK but still present in CoreGraphics.
+// We need it to detect when games hide the cursor (mouse capture mode).
+@_silgen_name("CGCursorIsVisible")
+private func _CGCursorIsVisible() -> boolean_t
+
 /// Orchestrates a single beam: capture → encode → send (sender) or receive → decode → display (receiver).
 /// Coordinates all components: WindowCapturer, H264Encoder/Decoder, RtpSender/Receiver,
 /// AudioCapturer/Encoder/Decoder/Player, TCPControlChannel, WindowHider, InputInjector.
@@ -27,6 +32,8 @@ class BeamSession {
     private var windowHider: WindowHider?
     private var inputInjector: InputInjector?
     private var hiddenAXWindow: AXUIElement?
+    private var cursorPollTimer: Timer?
+    private var lastCursorVisible: boolean_t = 1
 
     // Receiver components
     private var videoReceiver: RtpReceiver?
@@ -36,6 +43,7 @@ class BeamSession {
     private var audioPlayer: AudioPlayer?
     private var inputHandler: RemoteInputHandler?
     private(set) var streamView: StreamView?
+    private(set) var isCursorCaptured: Bool = false
 
     // Shared
     private var controlChannel: TCPControlChannel?
@@ -175,6 +183,23 @@ class BeamSession {
         case "keyframe_request":
             h264Encoder?.forceKeyframe()
 
+        case "cursor_state":
+            // Sender reports cursor visibility change (e.g. game captured/released cursor)
+            if role == .receiver {
+                if let visible = msg["visible"] as? Bool {
+                    print("BeamSession: cursor_state received, visible=\(visible)")
+                    if visible {
+                        inputHandler?.releaseCursor()
+                        isCursorCaptured = false
+                    } else {
+                        inputHandler?.captureCursor()
+                        isCursorCaptured = true
+                    }
+                } else {
+                    print("BeamSession: cursor_state received but 'visible' not a Bool: \(msg)")
+                }
+            }
+
         default:
             break
         }
@@ -187,26 +212,34 @@ class BeamSession {
         let width = Int(window.frame.width)
         let height = Int(window.frame.height)
 
-        // Video pipeline: capture → encode → send
-        windowCapturer = WindowCapturer()
-        h264Encoder = H264Encoder(width: Int32(width), height: Int32(height))
-        videoSender = RtpSender(host: .init(remoteHost), port: .init(rawValue: remoteVideoPort)!)
+        // Capture components directly in closures instead of through [weak self]
+        // to avoid @Observable thread-safety crashes.
 
-        h264Encoder?.onNAL = { [weak self] nalData, isKeyframe, timestamp in
-            self?.videoSender?.sendNAL(data: nalData, isKeyframe: isKeyframe, timestamp: timestamp)
+        // Video pipeline: capture → encode → send
+        let capturer = WindowCapturer()
+        let encoder = H264Encoder(width: Int32(width), height: Int32(height))
+        let vSender = RtpSender(host: .init(remoteHost), port: .init(rawValue: remoteVideoPort)!)
+        windowCapturer = capturer
+        h264Encoder = encoder
+        videoSender = vSender
+
+        encoder.onNAL = { nalData, isKeyframe, timestamp in
+            vSender.sendNAL(data: nalData, isKeyframe: isKeyframe, timestamp: timestamp)
         }
 
-        windowCapturer?.onFrame = { [weak self] pixelBuffer, pts in
-            self?.h264Encoder?.encode(pixelBuffer: pixelBuffer, timestamp: pts)
+        capturer.onFrame = { pixelBuffer, pts in
+            encoder.encode(pixelBuffer: pixelBuffer, timestamp: pts)
         }
 
         // Audio pipeline: capture → encode → send
         do {
-            audioEncoder = try AudioEncoder(sampleRate: 48000, channels: 2)
-            audioSender = RtpSender(host: .init(remoteHost), port: .init(rawValue: remoteAudioPort)!)
+            let aEncoder = try AudioEncoder(sampleRate: 48000, channels: 2)
+            let aSender = RtpSender(host: .init(remoteHost), port: .init(rawValue: remoteAudioPort)!)
+            audioEncoder = aEncoder
+            audioSender = aSender
             var audioSeq: UInt32 = 0
-            audioEncoder?.onAAC = { [weak self] aacData in
-                self?.audioSender?.sendNAL(data: aacData, isKeyframe: false, timestamp: audioSeq)
+            aEncoder.onAAC = { aacData in
+                aSender.sendNAL(data: aacData, isKeyframe: false, timestamp: audioSeq)
                 audioSeq += 1
             }
         } catch {
@@ -225,22 +258,29 @@ class BeamSession {
             }
         }
 
+        // Activate the target app so postToPid mouse events are routed rather than
+        // treated as "activate this app" events (which macOS does for inactive apps).
+        NSRunningApplication(processIdentifier: targetPID)?.activate(options: [])
+
         // Start capture
         Task {
             do {
-                try await windowCapturer?.startCapture(window: window, width: width, height: height)
+                try await capturer.startCapture(window: window, width: width, height: height)
 
                 // Start audio capture (needs display for SCK)
                 if let display = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
                     .displays.first {
                     let app = window.owningApplication!
-                    audioCapturer = AudioCapturer()
-                    audioCapturer?.onPCMBuffer = { [weak self] buffer in
-                        self?.audioEncoder?.encode(pcmBuffer: buffer)
+                    let aCapturer = AudioCapturer()
+                    self.audioCapturer = aCapturer
+                    let aEnc = self.audioEncoder
+                    aCapturer.onPCMBuffer = { buffer in
+                        aEnc?.encode(pcmBuffer: buffer)
                     }
-                    try await audioCapturer?.start(app: app, display: display, mute: true)
+                    try await aCapturer.start(app: app, display: display, mute: true)
                 }
 
+                self.startCursorPolling()
                 transition(to: .active)
             } catch {
                 print("BeamSession: capture start failed: \(error)")
@@ -249,7 +289,26 @@ class BeamSession {
         }
     }
 
+    /// Poll cursor visibility and notify receiver when cursor is hidden/shown (for games).
+    private func startCursorPolling() {
+        lastCursorVisible = 1
+        cursorPollTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
+            guard let self, self.state == .active else { return }
+            let visible = _CGCursorIsVisible()
+            if visible != self.lastCursorVisible {
+                self.lastCursorVisible = visible
+                let isVisible = visible != 0
+                print("BeamSession: cursor visibility changed to \(isVisible), sending cursor_state")
+                self.controlChannel?.send(type: "cursor_state", payload: [
+                    "visible": isVisible,
+                ])
+            }
+        }
+    }
+
     private func teardownSender() {
+        cursorPollTimer?.invalidate()
+        cursorPollTimer = nil
         let wc = windowCapturer
         let ac = audioCapturer
         Task {
@@ -266,41 +325,54 @@ class BeamSession {
         windowHider?.destroyDisplay()
         windowHider = nil
         hiddenAXWindow = nil
+
+        // Restore Beam as active app after target app was activated for input injection
+        NSApp.activate()
     }
 
     // MARK: - Receiver Setup
 
     private func setupReceiver(width: Int, height: Int, hasAudio: Bool) {
-        // Video pipeline: receive → decode → display
-        h264Decoder = H264Decoder()
-        streamView = StreamView()
+        // Capture components directly in closures instead of through [weak self]
+        // to avoid @Observable thread-safety crashes (background threads accessing
+        // @Observable properties via self triggers data races).
 
-        h264Decoder?.onFrame = { [weak self] pixelBuffer, pts in
-            self?.streamView?.enqueue(pixelBuffer: pixelBuffer, timestamp: pts)
+        // Video pipeline: receive → decode → display
+        let decoder = H264Decoder()
+        let view = StreamView()
+        h264Decoder = decoder
+        streamView = view
+
+        decoder.onFrame = { pixelBuffer, pts in
+            view.enqueue(pixelBuffer: pixelBuffer, timestamp: pts)
         }
 
-        videoReceiver = RtpReceiver(port: 0)  // system-assigned port
-        localVideoPort = videoReceiver?.localPort ?? 0
+        let vr = RtpReceiver(port: 0)  // system-assigned port
+        videoReceiver = vr
+        localVideoPort = vr.localPort
 
-        videoReceiver?.onNAL = { [weak self] nalData, isKeyframe, timestamp in
-            self?.h264Decoder?.decodeNAL(nalData, timestamp: timestamp)
+        vr.onNAL = { nalData, isKeyframe, timestamp in
+            decoder.decodeNAL(nalData, timestamp: timestamp)
         }
 
         // Audio pipeline: receive → decode → play
         if hasAudio {
             do {
-                audioDecoder = try AudioDecoder(sampleRate: 48000, channels: 2)
-                audioPlayer = try AudioPlayer()
+                let aDecoder = try AudioDecoder(sampleRate: 48000, channels: 2)
+                let player = try AudioPlayer()
+                audioDecoder = aDecoder
+                audioPlayer = player
 
-                audioDecoder?.onPCMBuffer = { [weak self] buffer in
-                    self?.audioPlayer?.play(interleavedBuffer: buffer)
+                aDecoder.onPCMBuffer = { buffer in
+                    player.play(interleavedBuffer: buffer)
                 }
 
-                audioReceiver = AudioReceiver(port: 0)
-                localAudioPort = audioReceiver?.localPort ?? 0
+                let ar = AudioReceiver(port: 0)
+                audioReceiver = ar
+                localAudioPort = ar?.localPort ?? 0
 
-                audioReceiver?.onAAC = { [weak self] aacData in
-                    self?.audioDecoder?.decode(aacData: aacData)
+                ar?.onAAC = { aacData in
+                    aDecoder.decode(aacData: aacData)
                 }
             } catch {
                 print("BeamSession: audio decoder init failed: \(error)")
@@ -308,11 +380,11 @@ class BeamSession {
         }
 
         // Input handler — attached when stream window is ready
-        inputHandler = RemoteInputHandler()
-        inputHandler?.onInputEvent = { [weak self] event in
-            // Nest under "event" key so the "type" field (e.g. "mouseMove") is preserved;
-            // the outer "type: input" is just the TCP message channel identifier.
-            self?.controlChannel?.send(["type": "input", "event": event])
+        let handler = RemoteInputHandler()
+        inputHandler = handler
+        let channel = controlChannel
+        handler.onInputEvent = { event in
+            channel?.send(["type": "input", "event": event])
         }
 
         // Send beam_accept with our receive ports
@@ -329,17 +401,37 @@ class BeamSession {
         videoReceiver = nil
         audioReceiver?.stop()
         audioReceiver = nil
+        h264Decoder?.stop()  // drain async decode callbacks before nil
         h264Decoder = nil
         audioDecoder = nil
+        audioPlayer?.stop()  // stop AVAudioEngine before dealloc (crashes if running when niled)
         audioPlayer = nil
         inputHandler?.detach()
         inputHandler = nil
+        // Flush the display layer BEFORE SwiftUI removes the view from the hierarchy.
+        // Without this, AVSampleBufferDisplayLayer's pending frames cause a use-after-free
+        // in Core Animation's transaction commit (_NSWindowTransformAnimation dealloc crash).
+        streamView?.stop()
         streamView = nil
     }
 
     /// Attach the input handler to the stream view (called by ReceivingView after the window is ready).
     func attachInputHandler(to view: NSView) {
         inputHandler?.attach(to: view)
+        inputHandler?.onCursorCaptureChanged = { [weak self] captured in
+            DispatchQueue.main.async { self?.isCursorCaptured = captured }
+        }
+    }
+
+    /// Toggle cursor lock (for games that need mouse capture).
+    func toggleCursorCapture() {
+        if isCursorCaptured {
+            inputHandler?.releaseCursor()
+            isCursorCaptured = false
+        } else {
+            inputHandler?.captureCursor()
+            isCursorCaptured = true
+        }
     }
 
     // MARK: - Private
@@ -405,8 +497,9 @@ private class AudioReceiver {
     }
 
     func stop() {
-        running = false
-        if socket >= 0 { close(socket); socket = -1 }
+        running = false                         // causes receiveLoop's `while running` to exit
+        if socket >= 0 { close(socket); socket = -1 }  // unblocks recv()
+        receiveQueue?.sync {}                   // wait for the loop to finish before returning
     }
 
     private func receiveLoop() {

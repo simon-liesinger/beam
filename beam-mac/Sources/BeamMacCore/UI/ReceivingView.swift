@@ -32,6 +32,15 @@ struct ReceivingView: View {
                         .foregroundStyle(.white.opacity(0.7))
                     Spacer()
                     Button {
+                        session.toggleCursorCapture()
+                    } label: {
+                        Image(systemName: session.isCursorCaptured ? "lock.fill" : "cursorarrow.lock")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
+                    .buttonStyle(.plain)
+                    .help(session.isCursorCaptured ? "Release cursor (Esc)" : "Capture cursor for games")
+                    Button {
                         session.stop()
                     } label: {
                         Image(systemName: "xmark.circle.fill")

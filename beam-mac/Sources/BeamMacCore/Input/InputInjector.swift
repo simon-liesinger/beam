@@ -30,27 +30,34 @@ class InputInjector {
 
     // MARK: - Mouse
 
-    func mouseMove(to point: CGPoint) {
+    func mouseMove(to point: CGPoint, deltaX: Double = 0, deltaY: Double = 0) {
         guard let event = CGEvent(mouseEventSource: source, mouseType: .mouseMoved,
                                    mouseCursorPosition: point, mouseButton: .left) else { return }
+        // Set raw deltas for apps using mouse capture (games reading deltaX/Y for camera)
+        if deltaX != 0 || deltaY != 0 {
+            event.setDoubleValueField(.mouseEventDeltaX, value: deltaX)
+            event.setDoubleValueField(.mouseEventDeltaY, value: deltaY)
+        }
         event.postToPid(pid)
     }
 
     func mouseDown(at point: CGPoint, button: CGMouseButton = .left) {
         let type: CGEventType = button == .left ? .leftMouseDown : .rightMouseDown
-        guard let event = CGEvent(mouseEventSource: source, mouseType: type,
+        guard let event = CGEvent(mouseEventSource: nil, mouseType: type,
                                    mouseCursorPosition: point, mouseButton: button) else { return }
-        // click count must be >= 1; with .privateState it defaults to 0 which apps ignore
         event.setIntegerValueField(.mouseEventClickState, value: 1)
-        event.postToPid(pid)
+        // post(tap:) goes through the window server which properly routes clicks
+        // to the target window on the virtual display. postToPid doesn't work for
+        // mouse clicks on hidden windows (the app treats them as activation events).
+        event.post(tap: .cghidEventTap)
     }
 
     func mouseUp(at point: CGPoint, button: CGMouseButton = .left) {
         let type: CGEventType = button == .left ? .leftMouseUp : .rightMouseUp
-        guard let event = CGEvent(mouseEventSource: source, mouseType: type,
+        guard let event = CGEvent(mouseEventSource: nil, mouseType: type,
                                    mouseCursorPosition: point, mouseButton: button) else { return }
         event.setIntegerValueField(.mouseEventClickState, value: 1)
-        event.postToPid(pid)
+        event.post(tap: .cghidEventTap)
     }
 
     func click(at point: CGPoint, button: CGMouseButton = .left) {
@@ -60,9 +67,9 @@ class InputInjector {
     }
 
     func mouseDrag(to point: CGPoint) {
-        guard let event = CGEvent(mouseEventSource: source, mouseType: .leftMouseDragged,
+        guard let event = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged,
                                    mouseCursorPosition: point, mouseButton: .left) else { return }
-        event.postToPid(pid)
+        event.post(tap: .cghidEventTap)
     }
 
     // MARK: - Keyboard
@@ -131,7 +138,9 @@ class InputInjector {
         switch type {
         case "mouseMove":
             guard let pt = denormalize(event, in: windowFrame) else { return }
-            mouseMove(to: pt)
+            let dx = event["deltaX"] as? Double ?? 0
+            let dy = event["deltaY"] as? Double ?? 0
+            mouseMove(to: pt, deltaX: dx, deltaY: dy)
 
         case "mouseDown":
             guard let pt = denormalize(event, in: windowFrame) else { return }

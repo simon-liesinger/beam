@@ -176,6 +176,18 @@ class H264Decoder {
         print("H264Decoder: session created (\(dims.width)x\(dims.height))")
     }
 
+    /// Drain all pending async decode callbacks then invalidate the session.
+    /// Must be called before niling the decoder to avoid use-after-free crashes.
+    func stop() {
+        onFrame = nil
+        if let s = session {
+            VTDecompressionSessionFinishDelayedFrames(s)
+            VTDecompressionSessionWaitForAsynchronousFrames(s)
+            VTDecompressionSessionInvalidate(s)
+            session = nil
+        }
+    }
+
     deinit {
         if let session = session {
             VTDecompressionSessionInvalidate(session)

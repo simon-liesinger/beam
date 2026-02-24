@@ -161,8 +161,16 @@ public class AppModel {
             if state == .stopped {
                 DispatchQueue.main.async {
                     self?.activeSession = nil
-                    self?.receiverWindow?.close()
+                    // Detach SwiftUI and hide window without animation to prevent
+                    // use-after-free in _NSWindowTransformAnimation during CA commit.
+                    self?.receiverWindow?.contentView = NSView()
+                    self?.receiverWindow?.orderOut(nil)
                     self?.receiverWindow = nil
+                    // Bring main window to front so the app doesn't appear to have quit
+                    if let mainWindow = NSApp.windows.first(where: { !($0 is NSPanel) && $0.isVisible }) {
+                        mainWindow.makeKeyAndOrderFront(nil)
+                    }
+                    NSApp.activate()
                 }
             }
         }
@@ -179,9 +187,14 @@ public class AppModel {
         window.title = "Beam - \(session.windowTitle)"
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.isMovableByWindowBackground = true
+        // NOTE: do NOT set isMovableByWindowBackground — it consumes all clicks,
+        // preventing them from reaching the content view / RemoteInputHandler.
+        // The transparent title bar still allows dragging from the top edge.
         window.backgroundColor = .black
         window.acceptsMouseMovedEvents = true
+        // Disable window animations to prevent _NSWindowTransformAnimation
+        // use-after-free crash during CA transaction commit on window close.
+        window.animationBehavior = .none
         window.center()
         window.contentView = NSHostingView(rootView: ReceivingView(session: session))
         window.makeKeyAndOrderFront(nil)

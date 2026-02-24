@@ -64,6 +64,11 @@ class WindowHider {
     func destroyDisplay() {
         // Restore all hidden windows first
         restoreAll()
+
+        // Revert the .forSession display arrangement before removing the virtual display.
+        // Without this, the Dock can get stranded on the now-removed virtual display.
+        CGRestorePermanentDisplayConfiguration()
+
         virtualDisplay = nil
         displayID = 0
         displayBounds = .zero
@@ -136,7 +141,10 @@ class WindowHider {
 
     private func positionAtBottomLeft() {
         let mainBounds = CGDisplayBounds(CGMainDisplayID())
-        let cornerX = Int32(-Int32(displayWidth) + 1)  // 1px overlap with main display's left edge
+        // 1px shared edge at the bottom-left corner of main display.
+        // CGRestorePermanentDisplayConfiguration() in destroyDisplay() prevents
+        // the Dock from getting stranded when the virtual display is removed.
+        let cornerX = Int32(-Int32(displayWidth) + 1)
         let belowY = Int32(mainBounds.origin.y + mainBounds.height)
 
         var config: CGDisplayConfigRef?

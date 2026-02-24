@@ -23,35 +23,39 @@ class RtpReceiver {
     // MARK: - Start / Stop
 
     init(port: UInt16) {
-        socket = Darwin.socket(AF_INET, SOCK_DGRAM, 0)
+        // Dual-stack IPv6 socket: receives both IPv4 and IPv6 UDP packets.
+        // Bonjour often resolves to IPv6 on local networks.
+        socket = Darwin.socket(AF_INET6, SOCK_DGRAM, 0)
         guard socket >= 0 else { fatalError("RtpReceiver: failed to create socket") }
 
         var on: Int32 = 1
+        var off: Int32 = 0
         setsockopt(socket, SOL_SOCKET, SO_REUSEADDR, &on, socklen_t(MemoryLayout<Int32>.size))
         setsockopt(socket, SOL_SOCKET, SO_REUSEPORT, &on, socklen_t(MemoryLayout<Int32>.size))
+        setsockopt(socket, IPPROTO_IPV6, IPV6_V6ONLY, &off, socklen_t(MemoryLayout<Int32>.size))
 
-        var addr = sockaddr_in()
-        addr.sin_len    = UInt8(MemoryLayout<sockaddr_in>.size)
-        addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port   = port.bigEndian
-        addr.sin_addr.s_addr = INADDR_ANY
+        var addr = sockaddr_in6()
+        addr.sin6_len    = UInt8(MemoryLayout<sockaddr_in6>.size)
+        addr.sin6_family = sa_family_t(AF_INET6)
+        addr.sin6_port   = port.bigEndian
+        addr.sin6_addr   = in6addr_any
 
         let bindResult = withUnsafePointer(to: &addr) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                bind(socket, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                bind(socket, $0, socklen_t(MemoryLayout<sockaddr_in6>.size))
             }
         }
         guard bindResult == 0 else { fatalError("RtpReceiver: bind failed: \(errno)") }
 
         // Read back assigned port (important when port == 0)
-        var bound = sockaddr_in()
-        var boundLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+        var bound = sockaddr_in6()
+        var boundLen = socklen_t(MemoryLayout<sockaddr_in6>.size)
         withUnsafeMutablePointer(to: &bound) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                 _ = getsockname(socket, $0, &boundLen)
             }
         }
-        localPort = UInt16(bigEndian: bound.sin_port)
+        localPort = UInt16(bigEndian: bound.sin6_port)
 
         receiveQueue.async { [weak self] in self?.receiveLoop() }
         print("RtpReceiver: listening on port \(localPort)")
@@ -59,8 +63,9 @@ class RtpReceiver {
 
     func stop() {
         let s = socket
-        socket = -1
-        if s >= 0 { Darwin.close(s) }
+        socket = -1                        // causes receiveLoop's `while socket >= 0` to exit
+        if s >= 0 { Darwin.close(s) }      // unblocks recv() so loop actually exits
+        receiveQueue.sync {}               // wait for the loop to finish before returning
     }
 
     // MARK: - Receive loop

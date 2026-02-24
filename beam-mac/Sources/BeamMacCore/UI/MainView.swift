@@ -87,6 +87,15 @@ public struct MainView: View {
                 .foregroundStyle(.secondary)
                 .disabled(model.isCheckingUpdate)
             }
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    Task { await model.refreshWindows() }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(model.isLoadingWindows)
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button("Beam") {
                     model.startBeam()
@@ -96,14 +105,14 @@ public struct MainView: View {
             }
         }
         .navigationTitle("Beam")
-        .frame(minWidth: 500, minHeight: 520)
+        .frame(minWidth: 600, minHeight: 520)
         .onAppear {
             // When returning from BeamingView the window may still be at its narrow size.
             // Expand back to at least the picker's minimum width.
             if let window = NSApp.windows.first(where: { !($0 is NSPanel) && $0.isVisible }) {
-                if window.frame.width < 500 {
+                if window.frame.width < 600 {
                     var frame = window.frame
-                    frame.size.width = 500
+                    frame.size.width = 600
                     window.setFrame(frame, display: true, animate: true)
                 }
             }

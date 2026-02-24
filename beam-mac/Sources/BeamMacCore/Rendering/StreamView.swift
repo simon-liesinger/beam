@@ -58,4 +58,12 @@ class StreamView: NSView {
     func flush() {
         displayLayer.flush()
     }
+
+    /// Flush all pending frames and detach the display layer.
+    /// Must be called before removing the view from the hierarchy to prevent
+    /// EXC_BAD_ACCESS in Core Animation transaction commits.
+    func stop() {
+        displayLayer.flushAndRemoveImage()
+        displayLayer.removeFromSuperlayer()
+    }
 }

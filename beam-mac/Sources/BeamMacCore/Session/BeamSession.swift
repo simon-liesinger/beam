@@ -95,20 +95,19 @@ class BeamSession {
 
     // MARK: - Receiver: Accept Beam
 
-    /// Receiver: adopt an already-accepted NWConnection from BonjourBrowser.
-    func acceptBeam(connection: NWConnection, offer: [String: Any]) {
+    /// Receiver: take ownership of the already-connected TCPControlChannel from AppModel.
+    func acceptBeam(channel: TCPControlChannel, offer: [String: Any]) {
         guard state == .idle else { return }
         role = .receiver
         peerName = offer["senderName"] as? String ?? "Unknown"
         windowTitle = offer["windowTitle"] as? String ?? "Untitled"
         transition(to: .connecting)
 
-        controlChannel = TCPControlChannel()
-        controlChannel?.onMessage = { [weak self] msg in self?.handleControlMessage(msg) }
-        controlChannel?.onStateChanged = { [weak self] tcpState in
+        controlChannel = channel
+        channel.onMessage = { [weak self] msg in self?.handleControlMessage(msg) }
+        channel.onStateChanged = { [weak self] tcpState in
             if tcpState == .disconnected { self?.stop() }
         }
-        controlChannel?.adopt(connection: connection)
 
         let width = offer["width"] as? Int ?? 1920
         let height = offer["height"] as? Int ?? 1080

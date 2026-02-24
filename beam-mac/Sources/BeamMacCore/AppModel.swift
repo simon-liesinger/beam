@@ -101,7 +101,7 @@ public class AppModel {
         channel.onMessage = { [weak self] msg in
             guard let self else { return }
             if (msg["type"] as? String) == "beam_offer" {
-                DispatchQueue.main.async { self.acceptIncomingBeam(connection: conn, offer: msg) }
+                DispatchQueue.main.async { self.acceptIncomingBeam(channel: channel, offer: msg) }
             }
         }
         channel.onStateChanged = { [weak self] state in
@@ -112,8 +112,7 @@ public class AppModel {
         channel.adopt(connection: conn)
     }
 
-    private func acceptIncomingBeam(connection: NWConnection, offer: [String: Any]) {
-        // Stop the pending channel — BeamSession will create its own
+    private func acceptIncomingBeam(channel: TCPControlChannel, offer: [String: Any]) {
         pendingChannel = nil
 
         let session = BeamSession(role: .receiver)
@@ -127,7 +126,7 @@ public class AppModel {
             }
         }
         activeSession = session
-        session.acceptBeam(connection: connection, offer: offer)
+        session.acceptBeam(channel: channel, offer: offer)
 
         // Open ReceivingView in a new window
         let window = NSWindow(

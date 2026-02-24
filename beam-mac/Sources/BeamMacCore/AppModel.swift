@@ -186,5 +186,13 @@ public class AppModel {
         window.contentView = NSHostingView(rootView: ReceivingView(session: session))
         window.makeKeyAndOrderFront(nil)
         receiverWindow = window
+
+        // Stop the session if the user closes the window with the X button
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification,
+                                               object: window, queue: .main) { [weak self, weak session] _ in
+            self?.receiverWindow = nil  // nil first so session.stop()'s close() call is a no-op
+            session?.stop()
+            self?.activeSession = nil
+        }
     }
 }

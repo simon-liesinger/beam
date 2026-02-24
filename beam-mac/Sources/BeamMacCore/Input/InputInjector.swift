@@ -40,6 +40,8 @@ class InputInjector {
         let type: CGEventType = button == .left ? .leftMouseDown : .rightMouseDown
         guard let event = CGEvent(mouseEventSource: source, mouseType: type,
                                    mouseCursorPosition: point, mouseButton: button) else { return }
+        // click count must be >= 1; with .privateState it defaults to 0 which apps ignore
+        event.setIntegerValueField(.mouseEventClickState, value: 1)
         event.postToPid(pid)
     }
 
@@ -47,6 +49,7 @@ class InputInjector {
         let type: CGEventType = button == .left ? .leftMouseUp : .rightMouseUp
         guard let event = CGEvent(mouseEventSource: source, mouseType: type,
                                    mouseCursorPosition: point, mouseButton: button) else { return }
+        event.setIntegerValueField(.mouseEventClickState, value: 1)
         event.postToPid(pid)
     }
 

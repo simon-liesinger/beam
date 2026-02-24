@@ -12,6 +12,8 @@ public class AppModel {
     var isLoadingWindows = false
     var searchText: String = ""
     var windowError: String?
+    var updateLabel: String = "Check for Updates…"
+    var isCheckingUpdate = false
 
     /// Active beam session (sender or receiver). Nil when idle.
     var activeSession: BeamSession?
@@ -88,6 +90,40 @@ public class AppModel {
         activeSession?.stop()
         receiverWindow?.close()
         receiverWindow = nil
+    }
+
+    // MARK: - Updates
+
+    func checkForUpdates() {
+        isCheckingUpdate = true
+        updateLabel = "Checking…"
+        Updater.check { [weak self] state in
+            guard let self else { return }
+            self.isCheckingUpdate = false
+            switch state {
+            case .checking:
+                self.updateLabel = "Checking…"
+                self.isCheckingUpdate = true
+            case .downloading:
+                self.updateLabel = "Downloading…"
+                self.isCheckingUpdate = true
+            case .installing:
+                self.updateLabel = "Installing…"
+                self.isCheckingUpdate = true
+            case .upToDate:
+                self.updateLabel = "Up to date"
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    self.updateLabel = "Check for Updates…"
+                }
+            case .error(let msg):
+                self.updateLabel = "Failed: \(msg)"
+                DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
+                    self.updateLabel = "Check for Updates…"
+                }
+            case .idle:
+                self.updateLabel = "Check for Updates…"
+            }
+        }
     }
 
     // MARK: - Incoming Beam

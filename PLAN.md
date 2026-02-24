@@ -41,6 +41,7 @@ Build an app that lets you "beam" windows between devices on the same LAN - sele
 - **Discovery**: mDNS service type `_beam._tcp.` with TXT records (version, platform, name, device ID)
 - **Control channel**: TCP, length-prefixed JSON messages (beam_offer, beam_accept, input events, beam_end, ping)
 - **Video channel**: UDP, lightweight RTP-like packets (12-byte header: seq, timestamp, flags, fragment info + H.264 NAL data)
+- **Audio channel**: UDP (separate port), RTP-like packets with AAC frames. Sent in parallel with video. beam_offer includes `hasAudio` flag; receiver knows whether to expect an audio stream
 - **Input events**: Normalized coordinates (0-1), platform-agnostic key codes, sent over TCP control channel
 
 ## Project Structure
@@ -54,6 +55,10 @@ beam/
       Capture/WindowCapturer.swift   # ScreenCaptureKit per-window capture
       Capture/WindowHider.swift      # CGVirtualDisplay + AXUIElement positioning
       Capture/WindowPicker.swift     # Window list from SCShareableContent
+      Audio/AudioCapturer.swift      # Core Audio Process Tap per-app capture + mute
+      Audio/AudioEncoder.swift       # AAC encode via AudioToolbox
+      Audio/AudioDecoder.swift       # AAC decode
+      Audio/AudioPlayer.swift        # AVAudioEngine low-latency playback
       Streaming/H264Encoder.swift    # VTCompressionSession hardware encode
       Streaming/H264Decoder.swift    # VTDecompressionSession hardware decode
       Streaming/RtpSender.swift      # UDP packetization + send
@@ -87,7 +92,7 @@ beam/
 
 Each task is labeled: **[OPUS]** = needs Opus (novel API integration, tricky bugs, architecture decisions), **[SONNET]** = Sonnet can handle (well-defined scope, standard patterns, clear spec).
 
-### Phase 0: Technical Spikes ✅ COMPLETE
+### Phase 0: Technical Spikes (5/5 COMPLETE)
 
 1. ~~**[OPUS] ScreenCaptureKit spike**~~ **DONE** - captures at 29.7fps, works with CommandLineTools (no Xcode needed). Code at `spikes/screen-capture/`.
 2. ~~**[OPUS] CGEvent injection spike**~~ **DONE** - code at `spikes/cgevent-injection/`. Results:
@@ -123,6 +128,19 @@ Each task is labeled: **[OPUS]** = needs Opus (novel API integration, tricky bug
      - Stack windows vertically to avoid occlusion
    - **Critical insight**: windows must NOT overlap on the virtual display — occlusion kills capture even off-screen.
    - Code at `spikes/window-hiding/`
+5. ~~**[OPUS] Audio capture + mute spike**~~ **DONE** - Full pipeline: ScreenCaptureKit audio capture → AAC encode → UDP transport → AAC decode → AVAudioEngine playback. Core Audio Process Taps for per-app muting. Code at `spikes/audio-capture/`. Key findings:
+   - **Architecture**: ScreenCaptureKit for audio capture (uses Screen Recording permission), Core Audio Process Taps for mute-only (uses System Audio Recording permission). Both are needed because Core Audio tap IO procs delivered zero data for capture, but Process Taps with `.mutedWhenTapped` + active IO proc successfully mute.
+   - **ScreenCaptureKit audio**: delivers non-interleaved Float32 PCM at 48kHz/2ch, 960 frames per callback (~47 callbacks/sec). Must use `CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer` with dynamically-sized buffer list (2 AudioBuffers for stereo non-interleaved). Requires app bundle with Info.plist for SCK daemon connection.
+   - **Core Audio Process Tap muting**: `CATapDescription(stereoMixdownOfProcesses:)` + `.mutedWhenTapped` + aggregate device. **Critical**: must create an IO proc via `AudioDeviceCreateIOProcIDWithBlock` and call `AudioDeviceStart` — without an active IO proc, the tap creates successfully but never actually intercepts/mutes audio.
+   - **Per-app mute limitation**: Chrome uses a single audio service helper process (PID) for ALL tabs. Muting that process mutes all Chrome audio, not just one tab. This is a fundamental OS-level limitation. For Beam, acceptable: when beaming a Chrome window, all Chrome audio goes through the beam.
+   - **Process targeting**: Find target app's audio processes by matching PIDs — `NSRunningApplication.runningApplications(withBundleIdentifier:)` + `sysctl` parent PID check for child helper processes.
+   - **AAC encoding**: AudioToolbox `AudioConverterFillComplexBuffer` with callback pattern. Interleave SCK's non-interleaved audio before encoding. 128kbps stereo. ~100 kbps actual throughput.
+   - **AAC decoding**: Mirror of encoder, outputs interleaved PCM. De-interleave for AVAudioEngine's non-interleaved playback format.
+   - **UDP transport**: 12-byte header (4-byte sequence + 8-byte mach_absolute_time) + AAC payload. ~47 packets/sec, zero loss on loopback.
+   - **Playback**: AVAudioEngine with `AVAudioPlayerNode.scheduleBuffer()`. Must use `standardFormatWithSampleRate` (non-interleaved) — AVAudioEngine rejects interleaved format.
+   - **Latency**: **0.2ms avg** (0.1–2.0ms range) on loopback. Real LAN latency will be higher but well within budget.
+   - **SCK daemon**: Binary must run from app bundle (`.app/Contents/MacOS/`) for SCK to accept connection. Raw debug binary gets -3805 errors. Must stop SCK stream cleanly on exit or daemon enters bad state (fix: `killall screencapturekit.replaykit.xpc`).
+   - **UDP receiver gotcha**: `recv()` blocks forever when called from Swift Task (cooperative threading). Must run receiver on main thread or a real POSIX thread, not DispatchQueue.global or Swift concurrency.
 
 ### Phase 1: Mac-to-Mac MVP
 
@@ -138,6 +156,9 @@ Each task is labeled: **[OPUS]** = needs Opus (novel API integration, tricky bug
 - **[SONNET]** RtpSender.swift - fragment NAL units into UDP packets with the 12-byte header format. Pure data framing, well-specified.
 - **[SONNET]** RtpReceiver.swift + FrameAssembler - receive UDP packets, reassemble by sequence number. Pure data reassembly logic.
 - **[OPUS]** StreamView.swift - AVSampleBufferDisplayLayer or Metal rendering of decoded frames. Needs timing/display sync right.
+- **[OPUS]** AudioCapturer.swift - SCK for per-app audio capture (non-interleaved Float32, 48kHz, 960 frames/callback) + Core Audio Process Tap for mute-only (`CATapDescription` + aggregate device + IO proc). Must handle Chrome's unified audio process (all tabs muted together). Binary must run from app bundle for SCK.
+- **[SONNET]** AudioEncoder.swift + AudioDecoder.swift - AAC encode/decode via AudioToolbox `AudioConverterFillComplexBuffer`. Interleave/de-interleave between SCK's non-interleaved and AAC's interleaved formats. Spike-validated pattern.
+- **[SONNET]** AudioPlayer.swift - AVAudioEngine + AVAudioPlayerNode playback on receiver. Must use `standardFormatWithSampleRate` (non-interleaved). Spike-validated pattern.
 
 **Week 4 - Input + session management:**
 - **[SONNET]** TCPControlChannel.swift - NWListener/NWConnection, length-prefixed JSON, heartbeat. Standard networking code.
@@ -178,14 +199,14 @@ Each task is labeled: **[OPUS]** = needs Opus (novel API integration, tricky bug
 
 | Category | Opus | Sonnet | Total |
 |----------|------|--------|-------|
-| Phase 0 (Spikes) | 0 | 0 | 0 (done) |
-| Phase 1 (Mac MVP) | 5 | 7 | 12 |
+| Phase 0 (Spikes) | 0 | 0 | 0 (5/5 done) |
+| Phase 1 (Mac MVP) | 6 | 9 | 15 |
 | Phase 2 (Polish) | 1 | 4 | 5 |
 | Phase 3 (Android) | 3 | 6 | 9 |
 | Phase 4 (Cross-plat) | 0 | 4 | 4 |
-| **Total** | **10** | **21** | **31** |
+| **Total** | **11** | **23** | **34** |
 
-**Sonnet handles ~68% of tasks.** The Opus tasks are concentrated in: codec encode/decode (VideoToolbox/MediaCodec), input injection (CGEvent/AccessibilityService), window hiding (CGVirtualDisplay), and streaming display (frame timing).
+**Sonnet handles ~68% of tasks.** The Opus tasks are concentrated in: codec encode/decode (VideoToolbox/MediaCodec), input injection (CGEvent/AccessibilityService), window hiding (CGVirtualDisplay), audio capture+mute (Core Audio Process Taps), and streaming display (frame timing).
 
 ## Key Risks
 
@@ -196,6 +217,9 @@ Each task is labeled: **[OPUS]** = needs Opus (novel API integration, tricky bug
 | Android: app capture pauses when fully backgrounded | High | Split-screen as default, freeze+resume as fallback |
 | Android AccessibilityService setup is confusing for users | Medium | Clear onboarding with screenshots |
 | Android: some apps don't support split-screen | Medium | Fall back to freeze+resume mode for those apps |
+| Core Audio Tap requires app to be actively playing audio for PID lookup | Medium | Poll `kAudioHardwarePropertyProcessObjectList` for changes; defer tap creation until audio starts |
+| macOS < 14.4 has no per-app mute capability | Medium | Fall back to ScreenCaptureKit audio (capture without mute) on older macOS; warn user audio will play locally |
+| Audio/video sync drift over time | Medium | Shared timestamp base between audio and video RTP streams; receiver syncs playback |
 | UDP packet loss on congested WiFi | Medium | Keyframe-on-loss + optional FEC later |
 
 ## Verification
@@ -220,7 +244,8 @@ Each task is labeled: **[OPUS]** = needs Opus (novel API integration, tricky bug
 - **Spike 2 (CGEvent injection)**: PASSED (with scroll caveat) - mouse/keyboard work via `postToPid`, scroll wheel doesn't but has viable workarounds (AX scroll bar, Page Down keys, mouse drag). Code at `spikes/cgevent-injection/`
 - **Spike 3 (VideoToolbox encode/decode)**: PASSED - 29.3fps, 14-16ms latency, zero packet loss. Full pipeline: capture → H.264 encode → UDP packetize → receive → decode → AVSampleBufferDisplayLayer render. Code at `spikes/videotoolbox/`
 - **Spike 4 (Window hiding)**: PASSED - CGVirtualDisplay at bottom-left corner, windows moved there via AXUIElement. Full 29fps capture, completely invisible. Live resize works. Code at `spikes/window-hiding/`
-- **All 4 spikes complete. Phase 0 done.** Ready for Phase 1 (Mac-to-Mac MVP).
+- **Spike 5 (Audio capture + mute)**: PASSED - SCK audio capture + AAC encode/decode + UDP transport + AVAudioEngine playback. Core Audio Process Tap muting works (all Chrome audio muted). 0.2ms loopback latency. Code at `spikes/audio-capture/`
+- **5/5 spikes complete.** All technical risks validated. Ready for Phase 1 (Mac-to-Mac MVP).
 - **No Xcode needed** - CommandLineTools + Swift 6.0.2 is sufficient
 - **Screen Recording permission**: Already granted
 - **Accessibility permission**: Already granted

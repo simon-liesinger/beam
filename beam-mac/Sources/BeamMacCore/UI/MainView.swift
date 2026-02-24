@@ -1,10 +1,11 @@
 import SwiftUI
 import ScreenCaptureKit
 
-struct MainView: View {
+public struct MainView: View {
+    public init() {}
     @Environment(AppModel.self) private var model
 
-    var body: some View {
+    public var body: some View {
         @Bindable var model = model
         List(selection: Binding(
             get: { model.selectedWindow?.windowID },

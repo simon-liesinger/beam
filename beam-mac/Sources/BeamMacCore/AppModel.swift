@@ -2,7 +2,7 @@ import Foundation
 import ScreenCaptureKit
 
 @Observable
-class AppModel {
+public class AppModel {
     var peers: [PeerInfo] = []
     var windows: [SCWindow] = []
     var selectedPeer: PeerInfo?
@@ -11,7 +11,7 @@ class AppModel {
 
     private let browser: BonjourBrowser
 
-    init() {
+    public init() {
         browser = BonjourBrowser()
         browser.onPeersChanged = { [weak self] peers in
             self?.peers = peers
@@ -20,7 +20,7 @@ class AppModel {
 
     /// Call once the main run loop is running (from DispatchQueue.main.async in main.swift).
     /// NetServiceBrowser and NetService require an active run loop for callbacks.
-    func start() {
+    public func start() {
         browser.start()
         Task { await refreshWindows() }
     }

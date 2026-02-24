@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import BeamMacCore
 
 // Explicit NSApplication setup — same pattern as the spikes, proven to work
 // without a proper .app bundle. SwiftUI's @main WindowGroup has reliability

@@ -6,8 +6,16 @@ public struct MainView: View {
     @Environment(AppModel.self) private var model
 
     public var body: some View {
+        if let session = model.activeSession {
+            BeamingView(session: session)
+        } else {
+            windowPickerView
+        }
+    }
+
+    private var windowPickerView: some View {
         @Bindable var model = model
-        List(selection: Binding(
+        return List(selection: Binding(
             get: { model.selectedWindow?.windowID },
             set: { id in model.selectedWindow = model.windows.first { $0.windowID == id } }
         )) {
@@ -25,14 +33,27 @@ public struct MainView: View {
             }
 
             Section {
-                if model.isLoadingWindows {
+                if let error = model.windowError {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("Cannot list windows", systemImage: "exclamationmark.triangle")
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                } else if model.isLoadingWindows {
                     Label("Loading windows…", systemImage: "arrow.clockwise")
                         .foregroundStyle(.secondary)
-                } else if model.windows.isEmpty {
-                    Label("No capturable windows found", systemImage: "macwindow.badge.plus")
-                        .foregroundStyle(.secondary)
+                } else if model.filteredWindows.isEmpty {
+                    if model.searchText.isEmpty {
+                        Label("No capturable windows found", systemImage: "macwindow.badge.plus")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Label("No matching windows", systemImage: "magnifyingglass")
+                            .foregroundStyle(.secondary)
+                    }
                 } else {
-                    ForEach(model.windows, id: \.windowID) { window in
+                    ForEach(model.filteredWindows, id: \.windowID) { window in
                         WindowRow(window: window, isSelected: model.selectedWindow?.windowID == window.windowID)
                             .contentShape(Rectangle())
                             .onTapGesture { model.selectedWindow = window }
@@ -54,6 +75,10 @@ public struct MainView: View {
             }
         }
         .listStyle(.sidebar)
+        .searchable(text: Binding(
+            get: { model.searchText },
+            set: { model.searchText = $0 }
+        ), prompt: "Search windows or apps…")
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Check for Updates…") {
@@ -63,14 +88,14 @@ public struct MainView: View {
             }
             ToolbarItem(placement: .primaryAction) {
                 Button("Beam") {
-                    // Wired up in Week 3 — streaming pipeline
+                    model.startBeam()
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(model.selectedPeer == nil || model.selectedWindow == nil)
             }
         }
         .navigationTitle("Beam")
-        .frame(minWidth: 380, minHeight: 480)
+        .frame(minWidth: 500, minHeight: 520)
     }
 }
 

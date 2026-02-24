@@ -5,9 +5,16 @@ let package = Package(
     name: "BeamMac",
     platforms: [.macOS(.v14)],
     targets: [
+        // Private API headers for CGVirtualDisplay
+        .target(
+            name: "CVirtualDisplay",
+            path: "Sources/CVirtualDisplay",
+            publicHeadersPath: "."
+        ),
         // All reusable code — imported by the executable and by tests
         .target(
             name: "BeamMacCore",
+            dependencies: ["CVirtualDisplay"],
             path: "Sources/BeamMacCore",
             swiftSettings: [.swiftLanguageMode(.v5)],
             linkerSettings: [

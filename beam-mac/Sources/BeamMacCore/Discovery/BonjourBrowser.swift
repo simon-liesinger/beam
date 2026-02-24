@@ -16,6 +16,8 @@ class BonjourBrowser: NSObject, NetServiceDelegate {
     private var resolvingServices: [NetService] = []  // must stay alive during resolve
 
     var onPeersChanged: (([PeerInfo]) -> Void)?
+    /// Called when a remote peer connects to our listener (incoming beam request).
+    var onIncomingConnection: ((NWConnection) -> Void)?
 
     override init() {
         deviceID = UUID().uuidString
@@ -54,7 +56,9 @@ class BonjourBrowser: NSObject, NetServiceDelegate {
             default: break
             }
         }
-        listener?.newConnectionHandler = { conn in conn.cancel() }
+        listener?.newConnectionHandler = { [weak self] conn in
+            self?.onIncomingConnection?(conn)
+        }
         listener?.start(queue: bgQueue)
     }
 

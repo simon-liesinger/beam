@@ -9,10 +9,21 @@ import BeamMacCore
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 
+// Main menu (gives us Cmd-Q, Cmd-W, etc.)
+let mainMenu = NSMenu()
+let appMenuItem = NSMenuItem()
+let appMenu = NSMenu()
+appMenu.addItem(NSMenuItem(title: "About Beam", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: ""))
+appMenu.addItem(.separator())
+appMenu.addItem(NSMenuItem(title: "Quit Beam", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+appMenuItem.submenu = appMenu
+mainMenu.addItem(appMenuItem)
+app.mainMenu = mainMenu
+
 let model = AppModel()
 
 let window = NSWindow(
-    contentRect: NSRect(x: 0, y: 0, width: 420, height: 560),
+    contentRect: NSRect(x: 0, y: 0, width: 540, height: 560),
     styleMask: [.titled, .closable, .miniaturizable, .resizable],
     backing: .buffered,
     defer: false

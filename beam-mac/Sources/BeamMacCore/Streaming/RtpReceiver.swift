@@ -7,6 +7,9 @@ class RtpReceiver {
     private var socket: Int32 = -1
     private let receiveQueue = DispatchQueue(label: "beam.rtp.receiver")
 
+    /// The port actually bound (useful when init with port 0 for system-assigned).
+    private(set) var localPort: UInt16 = 0
+
     /// Called on `receiveQueue` for each fully reassembled NAL unit.
     var onNAL: ((Data, Bool, UInt32) -> Void)?
 
@@ -40,8 +43,18 @@ class RtpReceiver {
         }
         guard bindResult == 0 else { fatalError("RtpReceiver: bind failed: \(errno)") }
 
+        // Read back assigned port (important when port == 0)
+        var bound = sockaddr_in()
+        var boundLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+        withUnsafeMutablePointer(to: &bound) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                _ = getsockname(socket, $0, &boundLen)
+            }
+        }
+        localPort = UInt16(bigEndian: bound.sin_port)
+
         receiveQueue.async { [weak self] in self?.receiveLoop() }
-        print("RtpReceiver: listening on port \(port)")
+        print("RtpReceiver: listening on port \(localPort)")
     }
 
     func stop() {

@@ -81,10 +81,11 @@ public struct MainView: View {
         ), prompt: "Search windows or apps…")
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Check for Updates…") {
-                    // TODO: wire up to Sparkle or manual DMG check in Phase 2
+                Button(model.updateLabel) {
+                    model.checkForUpdates()
                 }
                 .foregroundStyle(.secondary)
+                .disabled(model.isCheckingUpdate)
             }
             ToolbarItem(placement: .primaryAction) {
                 Button("Beam") {
@@ -96,6 +97,17 @@ public struct MainView: View {
         }
         .navigationTitle("Beam")
         .frame(minWidth: 500, minHeight: 520)
+        .onAppear {
+            // When returning from BeamingView the window may still be at its narrow size.
+            // Expand back to at least the picker's minimum width.
+            if let window = NSApp.windows.first(where: { !($0 is NSPanel) && $0.isVisible }) {
+                if window.frame.width < 500 {
+                    var frame = window.frame
+                    frame.size.width = 500
+                    window.setFrame(frame, display: true, animate: true)
+                }
+            }
+        }
     }
 }
 

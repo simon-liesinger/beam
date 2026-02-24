@@ -73,12 +73,12 @@ class InputInjector {
     }
 
     /// Post a mouse event via .cghidEventTap without stealing the sender's cursor.
-    /// Saves the current cursor position, posts the event (which warps the cursor
-    /// to the virtual display), then immediately warps it back.
+    /// Disassociates the cursor from mouse events so the window server delivers
+    /// the click to the correct window but doesn't move the visible cursor.
     private func postWithoutMovingCursor(_ event: CGEvent) {
-        let savedPos = CGEvent(source: nil)?.location ?? .zero
+        CGAssociateMouseAndMouseCursorPosition(0)
         event.post(tap: .cghidEventTap)
-        CGWarpMouseCursorPosition(savedPos)
+        CGAssociateMouseAndMouseCursorPosition(1)
     }
 
     // MARK: - Keyboard

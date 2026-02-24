@@ -12,7 +12,7 @@ public class AppModel {
     var isLoadingWindows = false
     var searchText: String = ""
     var windowError: String?
-    var updateLabel: String = "Check for Updates…"
+    var updateLabel: String = AppModel.idleUpdateLabel
     var isCheckingUpdate = false
 
     /// Active beam session (sender or receiver). Nil when idle.
@@ -94,6 +94,11 @@ public class AppModel {
 
     // MARK: - Updates
 
+    private static var idleUpdateLabel: String {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        return "v\(v) — Check for Updates…"
+    }
+
     func checkForUpdates() {
         isCheckingUpdate = true
         updateLabel = "Checking…"
@@ -113,15 +118,15 @@ public class AppModel {
             case .upToDate:
                 self.updateLabel = "Up to date"
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                    self.updateLabel = "Check for Updates…"
+                    self.updateLabel = AppModel.idleUpdateLabel
                 }
             case .error(let msg):
                 self.updateLabel = "Failed: \(msg)"
                 DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
-                    self.updateLabel = "Check for Updates…"
+                    self.updateLabel = AppModel.idleUpdateLabel
                 }
             case .idle:
-                self.updateLabel = "Check for Updates…"
+                self.updateLabel = AppModel.idleUpdateLabel
             }
         }
     }

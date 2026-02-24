@@ -69,23 +69,27 @@ class BeamSession {
         transition(to: .connecting)
 
         controlChannel = TCPControlChannel()
-        controlChannel?.onMessage = { [weak self] msg in self?.handleControlMessage(msg) }
+        controlChannel?.onMessage = { [weak self] msg in
+            DispatchQueue.main.async { self?.handleControlMessage(msg) }
+        }
         controlChannel?.onStateChanged = { [weak self] tcpState in
-            guard let self else { return }
-            if tcpState == .connected {
-                // Connected to peer — send beam_offer
-                let width = Int(window.frame.width)
-                let height = Int(window.frame.height)
-                self.controlChannel?.send(type: "beam_offer", payload: [
-                    "senderName": Host.current().localizedName ?? "Mac",
-                    "windowTitle": self.windowTitle,
-                    "width": width,
-                    "height": height,
-                    "hasAudio": true,
-                    "bundleID": window.owningApplication?.bundleIdentifier ?? "",
-                ])
-            } else if tcpState == .disconnected {
-                self.stop()
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if tcpState == .connected {
+                    // Connected to peer — send beam_offer
+                    let width = Int(window.frame.width)
+                    let height = Int(window.frame.height)
+                    self.controlChannel?.send(type: "beam_offer", payload: [
+                        "senderName": Host.current().localizedName ?? "Mac",
+                        "windowTitle": self.windowTitle,
+                        "width": width,
+                        "height": height,
+                        "hasAudio": true,
+                        "bundleID": window.owningApplication?.bundleIdentifier ?? "",
+                    ])
+                } else if tcpState == .disconnected {
+                    self.stop()
+                }
             }
         }
 
@@ -104,9 +108,13 @@ class BeamSession {
         transition(to: .connecting)
 
         controlChannel = channel
-        channel.onMessage = { [weak self] msg in self?.handleControlMessage(msg) }
+        channel.onMessage = { [weak self] msg in
+            DispatchQueue.main.async { self?.handleControlMessage(msg) }
+        }
         channel.onStateChanged = { [weak self] tcpState in
-            if tcpState == .disconnected { self?.stop() }
+            DispatchQueue.main.async {
+                if tcpState == .disconnected { self?.stop() }
+            }
         }
 
         let width = offer["width"] as? Int ?? 1920
@@ -117,8 +125,12 @@ class BeamSession {
     // MARK: - Stop
 
     func stop() {
-        guard state != .stopped else { return }
+        guard state != .stopped && state != .stopping else { return }
         transition(to: .stopping)
+
+        // Nil callbacks immediately so TCP disconnect events can't call stop() re-entrantly
+        controlChannel?.onStateChanged = nil
+        controlChannel?.onMessage = nil
 
         controlChannel?.send(type: "beam_end")
 
@@ -154,10 +166,10 @@ class BeamSession {
 
         case "input":
             // Input event from receiver → inject into sender's hidden window
-            if role == .sender, let inputInjector, let hiddenAXWindow {
-                if let frame = windowHider?.currentFrame(of: hiddenAXWindow) {
-                    inputInjector.apply(event: msg, windowFrame: frame)
-                }
+            if role == .sender, let inputInjector, let hiddenAXWindow,
+               let event = msg["event"] as? [String: Any],
+               let frame = windowHider?.currentFrame(of: hiddenAXWindow) {
+                inputInjector.apply(event: event, windowFrame: frame)
             }
 
         case "keyframe_request":
@@ -298,9 +310,9 @@ class BeamSession {
         // Input handler — attached when stream window is ready
         inputHandler = RemoteInputHandler()
         inputHandler?.onInputEvent = { [weak self] event in
-            var msg = event
-            msg["type"] = "input"
-            self?.controlChannel?.send(msg)
+            // Nest under "event" key so the "type" field (e.g. "mouseMove") is preserved;
+            // the outer "type: input" is just the TCP message channel identifier.
+            self?.controlChannel?.send(["type": "input", "event": event])
         }
 
         // Send beam_accept with our receive ports
@@ -350,22 +362,25 @@ private class AudioReceiver {
     var onAAC: ((Data) -> Void)?
 
     init?(port: UInt16) {
-        let sock = Darwin.socket(AF_INET, SOCK_DGRAM, 0)
+        // Dual-stack IPv6 socket for both IPv4 and IPv6
+        let sock = Darwin.socket(AF_INET6, SOCK_DGRAM, 0)
         guard sock >= 0 else { localPort = 0; return nil }
         socket = sock
 
         var opt: Int32 = 1
+        var off: Int32 = 0
         setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, &opt, socklen_t(MemoryLayout<Int32>.size))
+        setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, &off, socklen_t(MemoryLayout<Int32>.size))
 
-        var addr = sockaddr_in()
-        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = port.bigEndian
-        addr.sin_addr.s_addr = INADDR_ANY
+        var addr = sockaddr_in6()
+        addr.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
+        addr.sin6_family = sa_family_t(AF_INET6)
+        addr.sin6_port = port.bigEndian
+        addr.sin6_addr = in6addr_any
 
         let bindResult = withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                bind(sock, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                bind(sock, $0, socklen_t(MemoryLayout<sockaddr_in6>.size))
             }
         }
         guard bindResult == 0 else {
@@ -375,14 +390,14 @@ private class AudioReceiver {
         }
 
         // Read back assigned port
-        var bound = sockaddr_in()
-        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+        var bound = sockaddr_in6()
+        var len = socklen_t(MemoryLayout<sockaddr_in6>.size)
         withUnsafeMutablePointer(to: &bound) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                 _ = getsockname(sock, $0, &len)
             }
         }
-        localPort = UInt16(bigEndian: bound.sin_port)
+        localPort = UInt16(bigEndian: bound.sin6_port)
 
         running = true
         receiveQueue = DispatchQueue(label: "beam.audio.recv")

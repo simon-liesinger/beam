@@ -50,20 +50,18 @@ class InputInjector {
 
     func mouseDown(at point: CGPoint, button: CGMouseButton = .left) {
         let type: CGEventType = button == .left ? .leftMouseDown : .rightMouseDown
-        guard let event = CGEvent(mouseEventSource: source, mouseType: type,
+        guard let event = CGEvent(mouseEventSource: nil, mouseType: type,
                                    mouseCursorPosition: point, mouseButton: button) else { return }
         event.setIntegerValueField(.mouseEventClickState, value: 1)
-        setWindowFields(on: event)
-        event.postToPid(pid)
+        postViaHidAndSnapBack(event)
     }
 
     func mouseUp(at point: CGPoint, button: CGMouseButton = .left) {
         let type: CGEventType = button == .left ? .leftMouseUp : .rightMouseUp
-        guard let event = CGEvent(mouseEventSource: source, mouseType: type,
+        guard let event = CGEvent(mouseEventSource: nil, mouseType: type,
                                    mouseCursorPosition: point, mouseButton: button) else { return }
         event.setIntegerValueField(.mouseEventClickState, value: 1)
-        setWindowFields(on: event)
-        event.postToPid(pid)
+        postViaHidAndSnapBack(event)
     }
 
     func click(at point: CGPoint, button: CGMouseButton = .left) {
@@ -73,22 +71,21 @@ class InputInjector {
     }
 
     func mouseDrag(to point: CGPoint) {
-        guard let event = CGEvent(mouseEventSource: source, mouseType: .leftMouseDragged,
+        guard let event = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged,
                                    mouseCursorPosition: point, mouseButton: .left) else { return }
-        setWindowFields(on: event)
-        event.postToPid(pid)
+        postViaHidAndSnapBack(event)
     }
 
-    /// Set the window-under-mouse fields so the target app routes the click
-    /// to the correct window instead of treating it as an activation event.
-    /// Fields 91/92 = kCGMouseEventWindowUnderMousePointer / ...ThatCanHandleThisEvent.
-    private func setWindowFields(on event: CGEvent) {
-        guard targetWindowID != 0 else { return }
-        if let f91 = CGEventField(rawValue: 91) {
-            event.setIntegerValueField(f91, value: Int64(targetWindowID))
-        }
-        if let f92 = CGEventField(rawValue: 92) {
-            event.setIntegerValueField(f92, value: Int64(targetWindowID))
+    /// Post a click/drag via .cghidEventTap (the only way to deliver clicks to virtual
+    /// display windows), then immediately post a mouseMoved back to the saved position
+    /// in the same HID event queue. The window server processes both sequentially,
+    /// so the cursor snaps back within one event cycle.
+    private func postViaHidAndSnapBack(_ event: CGEvent) {
+        let savedPos = CGEvent(source: nil)?.location ?? .zero
+        event.post(tap: .cghidEventTap)
+        if let snapBack = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
+                                   mouseCursorPosition: savedPos, mouseButton: .left) {
+            snapBack.post(tap: .cghidEventTap)
         }
     }
 

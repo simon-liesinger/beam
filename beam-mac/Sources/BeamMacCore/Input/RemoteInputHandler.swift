@@ -101,10 +101,12 @@ class RemoteInputHandler {
             sendMouse("mouseDrag", event: event, view: view)
 
         case .scrollWheel:
-            let dy = Float(event.scrollingDeltaY)
-            // Normalize: positive scroll delta = scroll down = increase scroll bar value
-            let normalizedDy = event.hasPreciseScrollingDeltas ? dy / 500.0 : dy * 0.03
-            onInputEvent?(["type": "scroll", "deltaY": -normalizedDy])
+            // Send raw scroll delta — InputInjector creates a matching CGEvent scroll wheel
+            onInputEvent?([
+                "type": "scroll",
+                "deltaY": event.scrollingDeltaY,
+                "precise": event.hasPreciseScrollingDeltas,
+            ])
 
         case .keyDown:
             // Escape releases cursor capture instead of being forwarded

@@ -177,12 +177,17 @@ public class AppModel {
         activeSession = session
         session.acceptBeam(channel: channel, offer: offer)
 
-        // Open ReceivingView in a new window — use offer dimensions so aspect ratio matches
+        // Open ReceivingView in a new window — use offer dimensions so aspect ratio matches.
+        // With fullSizeContentView the content view fills the entire window frame,
+        // so compute contentRect such that the frame equals offerW x offerH exactly.
         let offerW = offer["width"] as? Int ?? 1280
         let offerH = offer["height"] as? Int ?? 720
+        let style: NSWindow.StyleMask = [.titled, .closable, .resizable, .fullSizeContentView]
+        let frameRect = NSRect(x: 0, y: 0, width: offerW, height: offerH)
+        let contentRect = NSWindow.contentRect(forFrameRect: frameRect, styleMask: style)
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: offerW, height: offerH),
-            styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
+            contentRect: contentRect,
+            styleMask: style,
             backing: .buffered,
             defer: false
         )

@@ -247,16 +247,25 @@ class BeamSession {
         }
 
         // Input injection
-        inputInjector = InputInjector(pid: targetPID)
-        inputInjector?.setTargetWindowID(window.windowID)
+        let injector = InputInjector(pid: targetPID)
+        injector.setTargetWindowID(window.windowID)
+        inputInjector = injector
 
         // Hide window on virtual display
         windowHider = WindowHider()
         if windowHider?.createDisplay() == true {
             hiddenAXWindow = windowHider?.hide(pid: targetPID, windowTitle: window.title)
             if let hiddenAXWindow {
-                inputInjector?.setAXWindow(hiddenAXWindow)
+                injector.setAXWindow(hiddenAXWindow)
             }
+        }
+
+        // When AX clicks don't work (e.g. games), restore the window to the sender's
+        // screen so CGEvent.post(.cghidEventTap) clicks land on a visible window.
+        injector.onNeedsCGEventFallback = { [weak self] in
+            guard let self, let ax = self.hiddenAXWindow else { return }
+            print("BeamSession: AX clicks failed, restoring window for CGEvent fallback")
+            self.windowHider?.restore(ax)
         }
 
         // Activate the target app so postToPid mouse events are routed rather than

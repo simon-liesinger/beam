@@ -10,6 +10,7 @@ class InputInjector {
     private let pid: pid_t
     private let source: CGEventSource
     private var axWindow: AXUIElement?
+    private var targetWindowID: CGWindowID = 0
 
     init(pid: pid_t) {
         self.pid = pid
@@ -28,6 +29,12 @@ class InputInjector {
         axWindow = window
     }
 
+    /// Set the target CGWindowID so click events can be routed via postToPid
+    /// without going through the window server (which steals the cursor).
+    func setTargetWindowID(_ windowID: CGWindowID) {
+        targetWindowID = windowID
+    }
+
     // MARK: - Mouse
 
     func mouseMove(to point: CGPoint, deltaX: Double = 0, deltaY: Double = 0) {
@@ -43,21 +50,20 @@ class InputInjector {
 
     func mouseDown(at point: CGPoint, button: CGMouseButton = .left) {
         let type: CGEventType = button == .left ? .leftMouseDown : .rightMouseDown
-        guard let event = CGEvent(mouseEventSource: nil, mouseType: type,
+        guard let event = CGEvent(mouseEventSource: source, mouseType: type,
                                    mouseCursorPosition: point, mouseButton: button) else { return }
         event.setIntegerValueField(.mouseEventClickState, value: 1)
-        // post(tap:) goes through the window server which properly routes clicks
-        // to the target window on the virtual display. postToPid doesn't work for
-        // mouse clicks on hidden windows (the app treats them as activation events).
-        postWithoutMovingCursor(event)
+        setWindowFields(on: event)
+        event.postToPid(pid)
     }
 
     func mouseUp(at point: CGPoint, button: CGMouseButton = .left) {
         let type: CGEventType = button == .left ? .leftMouseUp : .rightMouseUp
-        guard let event = CGEvent(mouseEventSource: nil, mouseType: type,
+        guard let event = CGEvent(mouseEventSource: source, mouseType: type,
                                    mouseCursorPosition: point, mouseButton: button) else { return }
         event.setIntegerValueField(.mouseEventClickState, value: 1)
-        postWithoutMovingCursor(event)
+        setWindowFields(on: event)
+        event.postToPid(pid)
     }
 
     func click(at point: CGPoint, button: CGMouseButton = .left) {
@@ -67,18 +73,23 @@ class InputInjector {
     }
 
     func mouseDrag(to point: CGPoint) {
-        guard let event = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged,
+        guard let event = CGEvent(mouseEventSource: source, mouseType: .leftMouseDragged,
                                    mouseCursorPosition: point, mouseButton: .left) else { return }
-        postWithoutMovingCursor(event)
+        setWindowFields(on: event)
+        event.postToPid(pid)
     }
 
-    /// Post a mouse event via .cghidEventTap without stealing the sender's cursor.
-    /// Disassociates the cursor from mouse events so the window server delivers
-    /// the click to the correct window but doesn't move the visible cursor.
-    private func postWithoutMovingCursor(_ event: CGEvent) {
-        CGAssociateMouseAndMouseCursorPosition(0)
-        event.post(tap: .cghidEventTap)
-        CGAssociateMouseAndMouseCursorPosition(1)
+    /// Set the window-under-mouse fields so the target app routes the click
+    /// to the correct window instead of treating it as an activation event.
+    /// Fields 91/92 = kCGMouseEventWindowUnderMousePointer / ...ThatCanHandleThisEvent.
+    private func setWindowFields(on event: CGEvent) {
+        guard targetWindowID != 0 else { return }
+        if let f91 = CGEventField(rawValue: 91) {
+            event.setIntegerValueField(f91, value: Int64(targetWindowID))
+        }
+        if let f92 = CGEventField(rawValue: 92) {
+            event.setIntegerValueField(f92, value: Int64(targetWindowID))
+        }
     }
 
     // MARK: - Keyboard

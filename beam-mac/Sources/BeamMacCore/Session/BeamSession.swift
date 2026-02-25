@@ -248,6 +248,7 @@ class BeamSession {
 
         // Input injection
         inputInjector = InputInjector(pid: targetPID)
+        inputInjector?.setTargetWindowID(window.windowID)
 
         // Hide window on virtual display
         windowHider = WindowHider()

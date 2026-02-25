@@ -12,6 +12,9 @@ class RemoteInputHandler {
     private weak var targetView: NSView?
     private(set) var isCursorCaptured = false
 
+    /// Source video aspect ratio (width / height) for letterbox-aware coordinate mapping.
+    var sourceAspectRatio: CGFloat = 16.0 / 9.0
+
     /// Called with a serialized input event dict ready to send over TCP.
     var onInputEvent: (([String: Any]) -> Void)?
 
@@ -158,9 +161,13 @@ class RemoteInputHandler {
         let bounds = view.bounds
         guard bounds.width > 0, bounds.height > 0 else { return }
 
-        // Normalize to 0–1 (flip Y: NSView origin is bottom-left, screen coords are top-left)
-        let nx = Double(loc.x / bounds.width)
-        let ny = Double(1.0 - loc.y / bounds.height)
+        // Compute the video content rect within the view (accounts for resizeAspect letterboxing)
+        let vRect = videoRect(in: bounds)
+
+        // Normalize to 0–1 relative to the video content area, not the full view
+        // (flip Y: NSView origin is bottom-left, screen coords are top-left)
+        let nx = Double((loc.x - vRect.origin.x) / vRect.width)
+        let ny = Double(1.0 - (loc.y - vRect.origin.y) / vRect.height)
 
         // Clamp — cursor can be slightly outside the view during drags
         guard nx >= -0.1, nx <= 1.1, ny >= -0.1, ny <= 1.1 else { return }
@@ -171,6 +178,23 @@ class RemoteInputHandler {
         msg["deltaX"] = event.deltaX
         msg["deltaY"] = event.deltaY
         onInputEvent?(msg)
+    }
+
+    /// Compute the video content rect within the view, matching AVSampleBufferDisplayLayer's
+    /// resizeAspect gravity. If the view aspect ratio differs from the source, there's letterboxing.
+    private func videoRect(in bounds: CGRect) -> CGRect {
+        let viewAspect = bounds.width / bounds.height
+        if sourceAspectRatio > viewAspect {
+            // Video wider than view — letterbox top/bottom
+            let height = bounds.width / sourceAspectRatio
+            let y = (bounds.height - height) / 2
+            return CGRect(x: 0, y: y, width: bounds.width, height: height)
+        } else {
+            // Video taller than view — letterbox left/right
+            let width = bounds.height * sourceAspectRatio
+            let x = (bounds.width - width) / 2
+            return CGRect(x: x, y: 0, width: width, height: bounds.height)
+        }
     }
 
     private func sendKey(_ type: String, event: NSEvent) {

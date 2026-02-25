@@ -393,6 +393,7 @@ class BeamSession {
 
         // Input handler — attached when stream window is ready
         let handler = RemoteInputHandler()
+        handler.sourceAspectRatio = CGFloat(width) / CGFloat(max(height, 1))
         inputHandler = handler
         let channel = controlChannel
         handler.onInputEvent = { event in

@@ -50,18 +50,18 @@ class InputInjector {
 
     func mouseDown(at point: CGPoint, button: CGMouseButton = .left) {
         let type: CGEventType = button == .left ? .leftMouseDown : .rightMouseDown
-        guard let event = CGEvent(mouseEventSource: nil, mouseType: type,
+        guard let event = CGEvent(mouseEventSource: source, mouseType: type,
                                    mouseCursorPosition: point, mouseButton: button) else { return }
         event.setIntegerValueField(.mouseEventClickState, value: 1)
-        postViaHidAndSnapBack(event)
+        warpPostAndRestore(event)
     }
 
     func mouseUp(at point: CGPoint, button: CGMouseButton = .left) {
         let type: CGEventType = button == .left ? .leftMouseUp : .rightMouseUp
-        guard let event = CGEvent(mouseEventSource: nil, mouseType: type,
+        guard let event = CGEvent(mouseEventSource: source, mouseType: type,
                                    mouseCursorPosition: point, mouseButton: button) else { return }
         event.setIntegerValueField(.mouseEventClickState, value: 1)
-        postViaHidAndSnapBack(event)
+        warpPostAndRestore(event)
     }
 
     func click(at point: CGPoint, button: CGMouseButton = .left) {
@@ -71,28 +71,20 @@ class InputInjector {
     }
 
     func mouseDrag(to point: CGPoint) {
-        guard let event = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged,
+        guard let event = CGEvent(mouseEventSource: source, mouseType: .leftMouseDragged,
                                    mouseCursorPosition: point, mouseButton: .left) else { return }
-        postViaHidAndSnapBack(event)
+        warpPostAndRestore(event)
     }
 
-    /// Post a click/drag via .cghidEventTap (the only way to deliver clicks to virtual
-    /// display windows), then snap the cursor back so the sender doesn't notice.
-    ///
-    /// Two-pronged fix:
-    /// 1. Posted mouseMoved in the HID queue → visual snap-back (processes right after the click)
-    /// 2. CGWarpMouseCursorPosition → updates HID delta tracking so physical mouse
-    ///    movements start from the correct position, not the virtual display coords.
-    private func postViaHidAndSnapBack(_ event: CGEvent) {
+    /// Warp cursor to the click position, deliver via postToPid, warp back.
+    /// postToPid bypasses the window server entirely (no HID state changes, no
+    /// tracking updates). Previous approaches used post(tap: .cghidEventTap) which
+    /// polluted window server state. postToPid failed before because apps validate
+    /// that the cursor is at the event's location — the pre-warp fixes that.
+    private func warpPostAndRestore(_ event: CGEvent) {
         let savedPos = CGEvent(source: nil)?.location ?? .zero
-        event.post(tap: .cghidEventTap)
-        // Visual snap-back via HID queue
-        if let snapBack = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
-                                   mouseCursorPosition: savedPos, mouseButton: .left) {
-            snapBack.post(tap: .cghidEventTap)
-        }
-        // Update HID delta tracking — without this, the next physical mouse movement
-        // starts from the virtual display coords instead of the saved position.
+        CGWarpMouseCursorPosition(event.location)
+        event.postToPid(pid)
         CGWarpMouseCursorPosition(savedPos)
     }
 

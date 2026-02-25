@@ -2,8 +2,9 @@ import Foundation
 import CoreGraphics
 import AppKit
 
-/// Injects mouse, keyboard, and scroll events into a target app via CGEvent.
-/// Uses CGEventSource(.privateState) so events are distinguishable from local user input.
+/// Injects mouse, keyboard, and scroll events into a target app.
+/// Clicks use AXUIElement (no cursor movement). Mouse moves use CGEvent.postToPid.
+/// Drags fall back to CGEvent with warp-and-restore.
 /// Scroll uses AXUIElement scroll bar value (works off-screen), with Page Down fallback.
 class InputInjector {
 
@@ -11,6 +12,9 @@ class InputInjector {
     private let source: CGEventSource
     private var axWindow: AXUIElement?
     private var targetWindowID: CGWindowID = 0
+
+    /// Buffered mouseDown — resolved on mouseUp (AX click) or mouseDrag (CGEvent).
+    private var pendingMouseDown: (point: CGPoint, button: CGMouseButton, time: CFAbsoluteTime)?
 
     init(pid: pid_t) {
         self.pid = pid
@@ -29,8 +33,7 @@ class InputInjector {
         axWindow = window
     }
 
-    /// Set the target CGWindowID so click events can be routed via postToPid
-    /// without going through the window server (which steals the cursor).
+    /// Set the target CGWindowID for event routing.
     func setTargetWindowID(_ windowID: CGWindowID) {
         targetWindowID = windowID
     }
@@ -40,7 +43,6 @@ class InputInjector {
     func mouseMove(to point: CGPoint, deltaX: Double = 0, deltaY: Double = 0) {
         guard let event = CGEvent(mouseEventSource: source, mouseType: .mouseMoved,
                                    mouseCursorPosition: point, mouseButton: .left) else { return }
-        // Set raw deltas for apps using mouse capture (games reading deltaX/Y for camera)
         if deltaX != 0 || deltaY != 0 {
             event.setDoubleValueField(.mouseEventDeltaX, value: deltaX)
             event.setDoubleValueField(.mouseEventDeltaY, value: deltaY)
@@ -48,39 +50,100 @@ class InputInjector {
         event.postToPid(pid)
     }
 
+    /// Buffer mouseDown — we don't know yet if this is a click or drag start.
     func mouseDown(at point: CGPoint, button: CGMouseButton = .left) {
-        let type: CGEventType = button == .left ? .leftMouseDown : .rightMouseDown
-        guard let event = CGEvent(mouseEventSource: source, mouseType: type,
-                                   mouseCursorPosition: point, mouseButton: button) else { return }
-        event.setIntegerValueField(.mouseEventClickState, value: 1)
-        warpPostAndRestore(event)
+        pendingMouseDown = (point: point, button: button, time: CFAbsoluteTimeGetCurrent())
     }
 
+    /// On mouseUp: if we have a buffered mouseDown nearby, treat as click (AX).
+    /// Otherwise deliver mouseUp via CGEvent (end of drag).
     func mouseUp(at point: CGPoint, button: CGMouseButton = .left) {
-        let type: CGEventType = button == .left ? .leftMouseUp : .rightMouseUp
-        guard let event = CGEvent(mouseEventSource: source, mouseType: type,
-                                   mouseCursorPosition: point, mouseButton: button) else { return }
-        event.setIntegerValueField(.mouseEventClickState, value: 1)
-        warpPostAndRestore(event)
+        if let pending = pendingMouseDown,
+           pending.button == button,
+           hypot(point.x - pending.point.x, point.y - pending.point.y) < 10,
+           CFAbsoluteTimeGetCurrent() - pending.time < 0.5 {
+            // Simple click — use Accessibility API (no cursor movement)
+            pendingMouseDown = nil
+            if !performAXClick(at: point, button: button) {
+                // AX failed — fall back to CGEvent warp-click
+                deliverCGEventClick(at: point, button: button)
+            }
+        } else {
+            // End of drag
+            pendingMouseDown = nil
+            let type: CGEventType = button == .left ? .leftMouseUp : .rightMouseUp
+            guard let event = CGEvent(mouseEventSource: source, mouseType: type,
+                                       mouseCursorPosition: point, mouseButton: button) else { return }
+            event.setIntegerValueField(.mouseEventClickState, value: 1)
+            warpPostAndRestore(event)
+        }
     }
 
     func click(at point: CGPoint, button: CGMouseButton = .left) {
-        mouseDown(at: point, button: button)
-        usleep(30_000)
-        mouseUp(at: point, button: button)
+        if !performAXClick(at: point, button: button) {
+            deliverCGEventClick(at: point, button: button)
+        }
     }
 
+    /// On mouseDrag: flush any buffered mouseDown as CGEvent first, then deliver drag.
     func mouseDrag(to point: CGPoint) {
+        if let pending = pendingMouseDown {
+            pendingMouseDown = nil
+            guard let downEvent = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown,
+                                           mouseCursorPosition: pending.point, mouseButton: .left) else { return }
+            downEvent.setIntegerValueField(.mouseEventClickState, value: 1)
+            warpPostAndRestore(downEvent)
+        }
         guard let event = CGEvent(mouseEventSource: source, mouseType: .leftMouseDragged,
                                    mouseCursorPosition: point, mouseButton: .left) else { return }
         warpPostAndRestore(event)
     }
 
-    /// Warp cursor to the click position, deliver via postToPid, warp back.
-    /// postToPid bypasses the window server entirely (no HID state changes, no
-    /// tracking updates). Previous approaches used post(tap: .cghidEventTap) which
-    /// polluted window server state. postToPid failed before because apps validate
-    /// that the cursor is at the event's location — the pre-warp fixes that.
+    // MARK: - Accessibility Click
+
+    /// Perform a click via AXUIElement — no cursor movement at all.
+    /// Returns true if the action was successfully delivered.
+    private func performAXClick(at point: CGPoint, button: CGMouseButton) -> Bool {
+        let appElement = AXUIElementCreateApplication(pid)
+        var elementRef: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(appElement, Float(point.x), Float(point.y), &elementRef) == .success,
+              let element = elementRef else {
+            print("InputInjector: AX element not found at (\(Int(point.x)), \(Int(point.y)))")
+            return false
+        }
+
+        let action = button == .right
+            ? kAXShowMenuAction as CFString
+            : kAXPressAction as CFString
+
+        let result = AXUIElementPerformAction(element, action)
+        if result == .success {
+            print("InputInjector: AX press at (\(Int(point.x)), \(Int(point.y)))")
+            return true
+        } else {
+            print("InputInjector: AX press failed (\(result.rawValue)) at (\(Int(point.x)), \(Int(point.y)))")
+            return false
+        }
+    }
+
+    /// CGEvent fallback for clicks when AX doesn't work.
+    private func deliverCGEventClick(at point: CGPoint, button: CGMouseButton) {
+        let downType: CGEventType = button == .left ? .leftMouseDown : .rightMouseDown
+        let upType: CGEventType = button == .left ? .leftMouseUp : .rightMouseUp
+
+        guard let down = CGEvent(mouseEventSource: source, mouseType: downType,
+                                  mouseCursorPosition: point, mouseButton: button),
+              let up = CGEvent(mouseEventSource: source, mouseType: upType,
+                                mouseCursorPosition: point, mouseButton: button) else { return }
+        down.setIntegerValueField(.mouseEventClickState, value: 1)
+        up.setIntegerValueField(.mouseEventClickState, value: 1)
+        warpPostAndRestore(down)
+        usleep(30_000)
+        warpPostAndRestore(up)
+    }
+
+    /// Warp cursor to event position, deliver via postToPid, warp back.
+    /// Used for drags and CGEvent fallback clicks.
     private func warpPostAndRestore(_ event: CGEvent) {
         let savedPos = CGEvent(source: nil)?.location ?? .zero
         CGWarpMouseCursorPosition(event.location)
@@ -132,7 +195,6 @@ class InputInjector {
             return
         }
 
-        // Find AXScrollArea → vertical scroll bar
         if let scrollBar = findVerticalScrollBar(in: axWindow) {
             var valueRef: CFTypeRef?
             AXUIElementCopyAttributeValue(scrollBar, kAXValueAttribute as CFString, &valueRef)
@@ -213,13 +275,11 @@ class InputInjector {
     }
 
     private func scrollViaKeys(deltaY: Float) {
-        // Page Down (121) or Page Up (116)
         let keyCode: CGKeyCode = deltaY > 0 ? 121 : 116
         keyPress(keyCode: keyCode)
     }
 
     private func findVerticalScrollBar(in element: AXUIElement) -> AXUIElement? {
-        // Walk children looking for AXScrollArea
         if let scrollArea = findScrollArea(in: element, depth: 5) {
             var scrollBarRef: CFTypeRef?
             if AXUIElementCopyAttributeValue(scrollArea, kAXVerticalScrollBarAttribute as CFString,

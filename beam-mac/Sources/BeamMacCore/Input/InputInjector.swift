@@ -77,16 +77,23 @@ class InputInjector {
     }
 
     /// Post a click/drag via .cghidEventTap (the only way to deliver clicks to virtual
-    /// display windows), then immediately post a mouseMoved back to the saved position
-    /// in the same HID event queue. The window server processes both sequentially,
-    /// so the cursor snaps back within one event cycle.
+    /// display windows), then snap the cursor back so the sender doesn't notice.
+    ///
+    /// Two-pronged fix:
+    /// 1. Posted mouseMoved in the HID queue → visual snap-back (processes right after the click)
+    /// 2. CGWarpMouseCursorPosition → updates HID delta tracking so physical mouse
+    ///    movements start from the correct position, not the virtual display coords.
     private func postViaHidAndSnapBack(_ event: CGEvent) {
         let savedPos = CGEvent(source: nil)?.location ?? .zero
         event.post(tap: .cghidEventTap)
+        // Visual snap-back via HID queue
         if let snapBack = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
                                    mouseCursorPosition: savedPos, mouseButton: .left) {
             snapBack.post(tap: .cghidEventTap)
         }
+        // Update HID delta tracking — without this, the next physical mouse movement
+        // starts from the virtual display coords instead of the saved position.
+        CGWarpMouseCursorPosition(savedPos)
     }
 
     // MARK: - Keyboard
